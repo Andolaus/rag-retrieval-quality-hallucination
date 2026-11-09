@@ -1,6 +1,7 @@
 # Original datasets remain local; processed research subsets are not ignored.
 /data/raw/*.jsonl
 /data/interim/*.jsonl
+/data/interim/*.csv
 
 # Local experiment outputs.
 /results/*

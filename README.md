@@ -61,6 +61,8 @@ scripts/
   nq_data.py               Shared JSONL reading and raw-output protection
   inspect_dataset.py       Schema checks, statistics, seeded sample
   filter_nq.py             Conservative screening with auditable exclusions
+  prepare_manual_review.py Seeded candidate sample for spreadsheet review
+  finalize_selection.py   Validated export of manually approved questions
   build_conditions.py     Condition assembly interfaces and validation
   evaluate.py             Evaluation interfaces and manual-judgment summaries
 prompts/                   Future versioned prompts
@@ -135,17 +137,103 @@ remain available for audit. The script does not infer a final 200-question set.
 
 ## Manual review and future experiments
 
-Review candidates with `include: true`, aiming for approximately 200 questions:
+### Prepare a reproducible review sample
 
-- Clear, objective, independently verifiable factual answer.
-- Not strongly time-dependent; preferably one underlying target fact.
-- Suitable for controlled retrieval passages and a believable incorrect variant.
+```powershell
+.\.venv\Scripts\python.exe scripts\prepare_manual_review.py --sample-size 400 --seed 42
+```
 
-Extend reviewed rows with `manually_approved` (boolean),
-`manual_exclusion_reason` (string or null), `verified_ground_truth` (answer-string
-list), and `verification_source` (nonempty independent source URL/citation).
-Save the selected, reviewed subset under `data/processed/`. Keep the screening
-output unchanged as an audit trail.
+This samples **400 included candidates without replacement** from
+`data/interim/nq_candidates.jsonl` into `data/interim/nq_manual_review.csv`.
+Only `include: true` rows are eligible. Identical input order, sample size, seed
+(default **42**), and Python environment reproduce the sample and its order.
+The script fails rather than silently shrinking an oversized sample.
+`review_id` is the original `question_id`, not a sample-position number.
+All question text and answer aliases are preserved.
+
+An existing CSV is never replaced unless `--overwrite` is explicitly supplied.
+Do not use that flag after starting manual edits unless you intend to discard
+them. Both scripts accept `--input` and `--output`. Keep the source screening
+JSONL unchanged. Back up the edited CSV; interim CSVs are ignored by Git.
+
+### Review in a spreadsheet
+
+Open/import the CSV as **UTF-8, comma-delimited**, keeping text columns as text.
+It includes a UTF-8 BOM for Excel. Save/export as UTF-8 comma-delimited CSV,
+not an Excel workbook or semicolon-delimited file.
+
+| Column | Editing instructions |
+|---|---|
+| `review_id` | Keep the source identifier unchanged. |
+| `question` | Keep the original question unchanged. |
+| `answers` | Keep all original aliases as a JSON array, e.g. `["Alias A", "Alias B"]`. |
+| `approved` | Enter `true` or `false` (case-insensitive); blank or `null` means pending. |
+| `exclusion_reason` | For exclusions, record a concise reason; leave blank for approvals. |
+| `verified_ground_truth` | For approvals, enter a JSON array of independently verified answers, e.g. `["Verified answer"]`. |
+| `verification_source` | For approvals, enter an independent source URL or bibliographic citation. |
+| `notes` | Optional review rationale or verification details. |
+
+The four nullable review fields initially use blank cells because CSV has no
+native null type. Do not copy the dataset aliases into verified ground truth
+without independently checking them. CSV quoting is handled by the scripts and
+spreadsheet; the answer-array brackets and double quotes remain part of the cell.
+The scripts validate structure, not the truth or reliability of your sources.
+
+A question should normally be **approved** only when:
+
+- It asks for a clear factual answer.
+- The answer can be independently verified.
+- The fact is reasonably stable over time.
+- The question is not subjective.
+- The question is not seriously ambiguous.
+- It preferably concerns one underlying target fact.
+- It is suitable for controlled retrieval-context manipulation.
+- It is possible to create a plausible relevant-but-incorrect context later.
+
+Questions should normally be **excluded** when:
+
+- They depend strongly on current or changing information.
+- There are multiple genuinely different correct answers and this makes evaluation difficult.
+- The question is ambiguous.
+- The answer requires a long list.
+- The answer is subjective or interpretive.
+- Reliable independent verification is difficult.
+- The question requires complex multi-hop reasoning that would make retrieval manipulation difficult to control.
+
+**Do not reject a question merely because NQ-Open contains multiple answer
+strings.** These may be aliases or alternative formulations of the same fact.
+Use consistent exclusion labels such as `time_dependent`, `ambiguous`,
+`multiple_target_facts`, `long_list`, `subjective`, `verification_difficult`,
+and `complex_multihop`; labels are free text, not a closed vocabulary.
+
+### Finalize approved questions
+
+After manually editing and saving the CSV:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\finalize_selection.py
+```
+
+This writes only `approved: true` rows to `data/processed/nq_selected.jsonl`.
+Each must have a nonempty question, a nonempty answer-alias array, a nonempty
+verified-ground-truth array, and an independent verification source. Invalid
+decisions, duplicate IDs, malformed CSV, or invalid approved fields fail
+explicitly before the output is opened; errors identify CSV rows.
+On successful reruns the selection JSONL is regenerated from the edited CSV.
+If there are no approvals yet, it is empty; this is not a finished research subset.
+
+The summary reports total rows, reviewed rows (true or false), approvals,
+exclusions (false only), pending rows, and exclusion-reason counts. Missing
+exclusion reasons are counted as `unspecified`. Pending rows are never silently
+classified as excluded. Aim for **approximately 200**, not exactly 200;
+no fixed final count is enforced, and pending rows do not prevent exporting
+valid approvals.
+
+Selected rows retain the review fields, typed JSON answer arrays, and original
+IDs. They also add `question_id`, `include: true`, `manually_approved: true`,
+and `manual_exclusion_reason: null` for the existing condition-builder interface.
+No ground truth is inferred from retrieved context, and no experimental
+contexts are created during review.
 
 `build_conditions()` requires inclusion, manual approval, verified answers, and
 a verification source. It accepts three explicitly supplied, reviewed contexts
@@ -184,7 +272,7 @@ No automatic factual evaluator or LLM-as-a-judge is implemented.
   order. Identical inputs/rules produce identical candidate contents.
 - Record model versions, generation settings, prompts, passages, annotation
   rubric, and evaluation code before later experiments.
-- Raw JSONL, interim JSONL, credentials, environments, and generated results are
+- Raw JSONL, interim JSONL/CSV, credentials, environments, and generated results are
   ignored. Processed data is deliberately not ignored; check attribution and
   licensing before publishing it.
 
